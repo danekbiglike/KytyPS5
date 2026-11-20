@@ -110,6 +110,11 @@ void PipelineCacheLog(fmt::format_string<Args...> format, Args&&... args) {
 	Log::WriteToConsoleAndLog(message);
 }
 
+uint64_t KYTY_SYSV_ABI ReadCleanShaderWord(uint64_t address) {
+	uint32_t word = 0;
+	return Libs::LibKernel::Memory::TryReadCleanGpuWord(address, word) ? (uint64_t{1} << 32) | word : 0;
+}
+
 bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) {
 	// Scalar and unformatted buffer dependencies use the same backing as native raw loads.
 	// Image synchronization belongs to formatted buffer bindings, not these reads.
@@ -360,12 +365,14 @@ ShaderModule& PipelineCache::CompileModule(Program& program, const ProgramKey& k
 template <typename InputInfo>
 const ShaderModule* PipelineCache::GetProgram(const ShaderParams& params, InputInfo& input_info,
                                               uint32_t& push_data_cursor) {
+	static const bool use_clean_words = std::getenv("KYTY_SRT_CLEAN_WORDS") != nullptr;
 	const auto user_data = std::span(params.user_data).first(params.user_data_count);
 	ShaderRecompiler::IR::SrtRuntime runtime {
 	    .user_data                  = user_data,
 	    .shader_base                = params.Base(),
 	    .read_specialization_memory = ReadShaderGuestMemory,
 	    .image_heap                 = m_image_heap,
+	    .clean_word_reader          = use_clean_words ? ReadCleanShaderWord : nullptr,
 	};
 	ShaderRecompiler::CompileOptions options {.wave_size = input_info.wave_size};
 	if constexpr (std::is_same_v<InputInfo, ShaderVertexInputInfo>) {

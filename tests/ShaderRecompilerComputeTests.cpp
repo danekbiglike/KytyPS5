@@ -4334,6 +4334,20 @@ public:
              label == label_value;
     };
     LibKernel::Memory::InstallGpuResources(&resources);
+    gpu.SendCommandSync([&] {
+      constexpr uint32_t expected = 0xca110001u;
+      LibKernel::Memory::WriteBacking(label_beside_address, &expected, sizeof(expected));
+      uint32_t word = 0;
+      Require("GpuCommandLane", "descriptor beside GPU write",
+              LibKernel::Memory::TryReadCleanGpuWord(label_beside_address, word) &&
+                  word == expected &&
+                  buffer_cache.HasGpuDirtyBytes(label_gpu_address, sizeof(word)),
+              "reading the clean descriptor lost its value or consumed the GPU write");
+      Require("GpuCommandLane", "descriptor overlapping GPU write",
+              !LibKernel::Memory::TryReadCleanGpuWord(label_gpu_address, word) &&
+                  !LibKernel::Memory::TryReadCleanGpuWord(label_gpu_address + 1, word),
+              "the clean descriptor path accepted a dirty or unaligned address");
+    });
     const bool label_beside_stored =
         release_label(label_beside_address) &&
         buffer_cache.HasGpuDirtyBytes(label_gpu_address,

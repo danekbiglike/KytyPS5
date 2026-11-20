@@ -1,6 +1,7 @@
 #ifndef EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_SRTWALKER_H_
 #define EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_SRTWALKER_H_
 
+#include "common/abi.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 
 #include <algorithm>
@@ -37,6 +38,9 @@ protected:
 	~ImageHeapSource() = default;
 };
 
+// A successful lookup returns bit 32 set and the fetched DWORD in the low bits.
+using SrtCleanWordReader = uint64_t (KYTY_SYSV_ABI *)(uint64_t address);
+
 struct SrtRuntime {
 	std::span<const uint32_t> user_data;
 	uint64_t                  shader_base                = 0;
@@ -45,6 +49,7 @@ struct SrtRuntime {
 	std::span<const uint32_t> workgroup_counts;
 	uint64_t                  indirect_args_address = 0;
 	ImageHeapSource*          image_heap            = nullptr;
+	SrtCleanWordReader        clean_word_reader     = nullptr;
 };
 
 class SrtReadCapture {

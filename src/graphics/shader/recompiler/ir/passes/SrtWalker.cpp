@@ -450,6 +450,8 @@ private:
 	std::map<std::pair<uint64_t, uint64_t>, uint32_t> m_bases;
 	std::deque<Stub>                                  m_stubs;
 	Xbyak::Label                                      m_ret;
+	Xbyak::Label                                      m_load_word;
+	uint32_t                                          m_reader_slot = 0;
 	uint32_t m_shader_base = 0, m_reach = 0, m_states = 0, m_states_end = 0, m_bias = 0;
 	uint32_t m_user_data = 0, m_captures = 0;
 	bool     m_body = true;
@@ -694,6 +696,8 @@ WalkerCompiler::Operand WalkerCompiler::AnalyzeRead(Node& node, const auto& arg,
 void WalkerCompiler::Layout() {
 	uint32_t offset = OutputOffset(m_plan) + static_cast<uint32_t>(m_outputs.size()) * 8u;
 	m_shader_base = offset;
+	offset += 8u;
+	m_reader_slot = offset;
 	offset += 8u;
 	for (uint32_t index = 0; index < m_nodes.size(); ++index) {
 		if (!Thunk(index)) continue;
@@ -1015,7 +1019,7 @@ void WalkerCompiler::EmitRead(const Node& node) {
 			c.ja(zero, Near);
 		}
 		// Every guest load is mov eax, [r10] (41 8b 02), so a fault completes it as a zero read.
-		c.mov(c.eax, c.dword[c.r10]);
+		c.call(m_load_word);
 		++m_captures;
 		c.mov(c.qword[c.r8], c.r10);
 		c.add(c.r8, 8);
@@ -1276,6 +1280,7 @@ void WalkerCompiler::Compile(std::span<const Value> values) {
 	std::deque<Xbyak::Label> exits;
 	c.add(c.rdx, m_bias);
 	c.mov(c.qword[At(m_shader_base)], c.rcx);
+	c.mov(c.qword[At(m_reader_slot)], c.r8);
 	for (const auto& [pair, slot]: m_bases) {
 		Base({Kind::UserData, pair.first}, {Kind::UserData, pair.second});
 		c.mov(c.qword[At(slot)], c.rax);
@@ -1431,6 +1436,38 @@ void WalkerCompiler::Compile(std::span<const Value> values) {
 		Branch(stub.operand, *stub.unknown);
 		c.jmp(stub.back, Near);
 	}
+	// Node thunks may be nested at any depth. Preserve the walk state across the host
+	// read and align the stack for the System V call. The ordinary load remains the
+	// fallback whenever backing cannot be used, including test runtimes without a reader.
+	c.L(m_load_word);
+	Xbyak::Label ordinary;
+	c.mov(c.rax, c.qword[At(m_reader_slot)]);
+	c.test(c.rax, c.rax);
+	c.jz(ordinary);
+	c.push(c.rbp);
+	c.mov(c.rbp, c.rsp);
+	c.push(c.rdi);
+	c.push(c.rsi);
+	c.push(c.rdx);
+	c.push(c.r8);
+	c.push(c.r10);
+	c.and_(c.rsp, -16);
+	c.mov(c.rdi, c.r10);
+	c.call(c.rax);
+	c.lea(c.rsp, c.ptr[c.rbp - 40]);
+	c.pop(c.r10);
+	c.pop(c.r8);
+	c.pop(c.rdx);
+	c.pop(c.rsi);
+	c.pop(c.rdi);
+	c.pop(c.rbp);
+	c.test(c.rax, c.rax);
+	c.jz(ordinary);
+	c.mov(c.eax, c.eax);
+	c.ret();
+	c.L(ordinary);
+	c.mov(c.eax, c.dword[c.r10]);
+	c.ret();
 	m_plan.srt_scratch.assign(m_plan.srt_captures / 8u + m_captures, 0u);
 	m_plan.srt_user_data = m_user_data;
 	c.readyRE();
@@ -1448,10 +1485,10 @@ bool WalkSrt(const ResourcePlan& plan, const SrtRuntime& runtime, std::vector<ui
              std::vector<std::pair<uint64_t, uint64_t>>* reads) {
 	if (plan.srt_code == nullptr || runtime.user_data.size() < plan.srt_user_data) return false;
 	flat.assign(plan.srt_reads.size(), 0u);
-	using Walker = const uint64_t* KYTY_SYSV_ABI (*)(const uint32_t*, uint32_t*, uint64_t*, uint64_t);
+	using Walker = const uint64_t* KYTY_SYSV_ABI (*)(const uint32_t*, uint32_t*, uint64_t*, uint64_t, SrtCleanWordReader);
 	t_running_walker = plan.srt_code.get();
 	const auto* end = plan.srt_code->getCode<Walker>()(runtime.user_data.data(), flat.data(),
-	                                                     plan.srt_scratch.data(), runtime.shader_base);
+	                                                     plan.srt_scratch.data(), runtime.shader_base, runtime.clean_word_reader);
 	t_running_walker = nullptr;
 	if (end == nullptr) return false;
 	if (reads != nullptr) {

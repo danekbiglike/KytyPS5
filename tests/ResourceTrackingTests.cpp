@@ -25,6 +25,14 @@
 
 namespace {
 
+uint64_t KYTY_SYSV_ABI ReadCleanZeroForTest(uint64_t address) {
+  return address == 0x1004u ? (uint64_t{1} << 32u) : 0u;
+}
+
+uint64_t KYTY_SYSV_ABI DeclineCleanReadForTest(uint64_t) {
+  return 0;
+}
+
 using namespace Libs::Graphics::ShaderRecompiler::IR;
 using Libs::Graphics::ShaderComputeInputInfo;
 using Libs::Graphics::ShaderType;
@@ -6173,6 +6181,17 @@ void TestSrtFlatteningAndRuntimeMemoization() {
   memory.fail_after = UINT32_MAX;
   Check(refresh(plan) && descriptor.dwords[0] == 0x12345678u && memory.reads == 1,
         "a zero read left a stale value in the next walk");
+
+  // A clean backing word may be zero. An unavailable word must still go through
+  // the ordinary guest load and see the latest contents.
+  runtime.clean_word_reader = ReadCleanZeroForTest;
+  memory.reads = 0;
+  Check(refresh(plan) && descriptor.dwords[0] == 0 && flat == std::vector<uint32_t>{0u} &&
+            memory.reads == 0, "a clean zero word fell through to guest memory");
+  runtime.clean_word_reader = DeclineCleanReadForTest;
+  Check(refresh(plan) && descriptor.dwords[0] == 0x12345678u && memory.reads == 1,
+        "unavailable clean backing did not fall back to the ordinary read");
+  runtime.clean_word_reader = nullptr;
 
   auto moved = std::move(plan);
   memory.reads = 0;

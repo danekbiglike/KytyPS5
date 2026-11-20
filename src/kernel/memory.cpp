@@ -804,6 +804,24 @@ bool TryReadBacking(uint64_t vaddr, void* data, uint64_t size) {
 	return g_guest_address_space->TryReadBacking(vaddr, data, size);
 }
 
+bool TryReadCleanGpuWord(uint64_t address, uint32_t& value) {
+	if (!g_gpu_resources || !Graphics::GuestGpu::IsGpuThread() ||
+		(address & 3u) != 0 || !IsGpuAddressRange(address, sizeof(value))) {
+		return false;
+	}
+	auto& context = GetGpuResources();
+	auto& buffers = context.GetBufferCache();
+	// A CPU read of a watched page would download data even if only a neighbour
+	// belongs to the GPU. Keep that page watched and read only the authoritative word.
+	if (!buffers.IsRegionGpuModified(address, sizeof(value)) ||
+		buffers.HasGpuDirtyBytes(address, sizeof(value)) ||
+		context.GetTextureCache().WriteBackTick(address, sizeof(value)) != 0 ||
+		!context.IsMapped(address, sizeof(value))) {
+		return false;
+	}
+	return TryReadBacking(address, &value, sizeof(value));
+}
+
 bool TryReadBufferBacking(uint64_t vaddr, void* data, uint64_t size) {
 	if (g_gpu_resources != nullptr && IsGpuAddressRange(vaddr, size)) {
 		if (!Graphics::GuestGpu::IsGpuThread()) {
