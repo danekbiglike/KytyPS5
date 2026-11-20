@@ -282,7 +282,13 @@ void PipelineCache::StoreModule(const ProgramKey& key, const Program& program,
 	Writer record;
 	IoAll(record, Record::Module);
 	IoKey(record, key);
-	IoAll(record, ShaderRecompiler::IR::SaveResourcePlan(program.resource_plan));
+	// The first module installs the plan for this key. Later specializations use
+	// that plan, including when the first module was restored from an earlier run.
+	if (program.modules.size() == 1) {
+		IoAll(record, ShaderRecompiler::IR::SaveResourcePlan(program.resource_plan));
+	} else {
+		IoAll(record, std::vector<uint8_t>{});
+	}
 	IoModule(record, module);
 	IoAll(record, spirv);
 	m_store.Append(std::move(record.bytes));

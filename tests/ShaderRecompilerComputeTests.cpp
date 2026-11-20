@@ -50387,6 +50387,9 @@ void CheckShaderStore(VulkanHarness &vulkan) {
       for (u32 i = 0; i < 4; i++) shaders.SetCsUserSgpr(i, output.fields[i]);
       context.MapMemory(base, allocation_size);
       processor.DispatchDirect(1, 1, 1, 0x41u);
+      // A second specialization shares the first module's serialized resource plan.
+      shaders.SetCsUserSgpr(1, output.fields[1] | (8u << 16u));
+      processor.DispatchDirect(1, 1, 1, 0x41u);
       auto &scheduler = context.GetCommandScheduler();
       DrawRenderState state{.topology = vk::PrimitiveTopology::eTriangleList};
       pipelines.GetGraphicsPrograms(scheduler.Current(), state);
@@ -50416,8 +50419,8 @@ void CheckShaderStore(VulkanHarness &vulkan) {
   const auto size = std::filesystem::file_size(store);
   Require(name, "cold start",
           cold.output == value && cold.prewarmed == std::array<size_t, 2>{} &&
-              cold.pipelines == std::array<size_t, 2>{1, 1} &&
-              cold.compiled[static_cast<size_t>(ShaderType::Compute)] == 1,
+              cold.pipelines == std::array<size_t, 2>{1, 2} &&
+              cold.compiled[static_cast<size_t>(ShaderType::Compute)] == 2,
           "the first run did not create its store, dispatch or pipelines");
   auto warm = cold;
   warm.prewarmed = cold.pipelines;
